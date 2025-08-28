@@ -3,8 +3,8 @@ import runpy
 
 import pytest
 import datetime
-from unittest.mock import AsyncMock, patch, mock_open, MagicMock, call
-from aiohttp import ClientSession
+from unittest.mock import AsyncMock, patch, mock_open, call
+
 
 import main
 from main import download_files
@@ -105,16 +105,13 @@ async def test_download_file_exception(mock_session):
 # Строки 40-60 файла main.py
 @pytest.mark.asyncio
 async def test_main(monkeypatch):
-    # 1) Зафиксируем время: end_date = 2025-07-03
     class FixedDatetime(datetime.datetime):
         @classmethod
         def now(cls, tz=None):
             return cls(2025, 7, 3, 10, 0, 0)  # любое время в этот день
 
-    # В main импортирован модуль `datetime`, меняем у него класс datetime
     monkeypatch.setattr(main.datetime, "datetime", FixedDatetime)
 
-    # 2) Замокаем зависимости
     mock_create_tables = AsyncMock()
     mock_download_files = AsyncMock()
     mock_parse_to_db = AsyncMock()
@@ -123,7 +120,6 @@ async def test_main(monkeypatch):
     monkeypatch.setattr(main, "download_files", mock_download_files)
     monkeypatch.setattr(main, "parse_to_db", mock_parse_to_db)
 
-    # 3) Подменим aiohttp.ClientSession на простой асинхронный КМ
     class DummySessionCM:
         async def __aenter__(self):
             return "SESSION"
@@ -132,7 +128,6 @@ async def test_main(monkeypatch):
 
     monkeypatch.setattr(main.aiohttp, "ClientSession", lambda: DummySessionCM())
 
-    # 4) Чтобы после загрузки что-то распарсилось, заранее положим имена файлов
     main.filenames.clear()
     main.filenames.extend([
         "oil_xls_20250701162000.xls",
@@ -140,27 +135,21 @@ async def test_main(monkeypatch):
         "oil_xls_20250703162000.xls",
     ])
 
-    # 5) Запускаем main()
     await main.main()
 
-    # 6) Проверки
-    # create_tables вызван
     mock_create_tables.assert_awaited_once()
 
-    # сгенерированные URL-ы соответствуют датам 01..03 июля 2025
     expected_dates = ["20250701", "20250702", "20250703"]
     expected_urls = [
         f"https://spimex.com/upload/reports/oil_xls/oil_xls_{d}162000.xls"
         for d in expected_dates
     ]
 
-    # download_files вызван по одному разу на каждый URL, и первый аргумент — это "SESSION"
     calls = mock_download_files.await_args_list
     called_urls = [c.args[1] for c in calls]
     assert called_urls == expected_urls
     assert all(c.args[0] == "SESSION" for c in calls)
 
-    # parse_to_db вызван для каждого файла из глобального списка
     mock_parse_to_db.assert_has_awaits(
         [call(name) for name in main.filenames],
         any_order=True
